@@ -60,7 +60,7 @@ fun getCameraRotate(
  *
  * @param sizeList 摄像头支持的分辨率列表
  * @param cameraRotate 表示camera画面旋转多少度后，才能跟当前屏幕方向匹配，并非cameraOrientation
- * @param displaySize 显示控件的尺寸
+ * @param suggestSize 建议尺寸
  * @return 返回摄像头最佳预览尺寸
  *
  * 算法策略：
@@ -72,7 +72,7 @@ fun getCameraRotate(
 fun getOptimalPreviewSize(
     sizeList: List<Camera.Size>,
     cameraRotate: Int,
-    displaySize: Size,
+    suggestSize: Size,
 ): Size {
     if (sizeList.isEmpty()) {
         throw IllegalArgumentException("No available output sizes")
@@ -82,11 +82,11 @@ fun getOptimalPreviewSize(
     val targetWidth: Int
     val targetHeight: Int
     if (cameraRotate == 90 || cameraRotate == 270) {
-        targetWidth = displaySize.height
-        targetHeight = displaySize.width
+        targetWidth = suggestSize.height
+        targetHeight = suggestSize.width
     } else {
-        targetWidth = displaySize.width
-        targetHeight = displaySize.height
+        targetWidth = suggestSize.width
+        targetHeight = suggestSize.height
     }
 
     val targetRatio = targetWidth / targetHeight.toFloat()

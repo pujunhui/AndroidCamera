@@ -142,49 +142,174 @@ fun getPreviewMatrix(
 }
 
 /**
- * 用于将帧数据位置转换为原始预览画面的位置
+ * Camera1+TextureView进行预览时，计算需要应用到 TextureView 的变换矩阵（方法2）。
+ * 此方法可以一次性对预览画面进行旋转、缩放、镜像等操作。
+ *
+ * 注意：必须手动设置 camera.setDisplayOrientation(0)，否则 camera 会自动旋转，导致计算错误。
+ *
+ * 矩阵计算思路：
+ *   使用矩阵求逆的方式：
+ *   - textureMatrix: TextureView 默认将未旋转的 Frame 拉伸铺满的矩阵
+ *   - displayMatrix: Frame 正常显示所需的最终矩阵
+ *   - previewMatrix: 我们需要求解的矩阵
+ *   - 关系式: displayMatrix * I= previewMatrix * textureMatrix * I
+ *   - 因此: previewMatrix = displayMatrix * textureMatrix^(-1)
+ *
+ * @param cameraRotate camera 画面需要旋转的角度（0, 90, 180, 270）
+ * @param cameraSize camera 预览尺寸（未旋转的原始尺寸）
+ * @param displaySize TextureView 的显示尺寸
+ * @param scaleType 缩放方式
+ * @param mirror 是否水平镜像（默认为false），前置摄像头已经镜像，如果想让其不镜像，这里可以设置为true，相当于二次镜像
  */
-fun getFrameMatrix(
+fun getPreviewMatrix2(
+    cameraRotate: Int,
     cameraSize: Size,
-    cameraOrientation: Int,
-    isFrontCamera: Boolean,
-    displaySize: Size
+    displaySize: Size,
+    scaleType: ScaleType = ScaleType.CENTER_CROP,
+    mirror: Boolean = false
 ): Matrix {
-    val drawMatrix = Matrix()
-
-    //步骤1、将人脸检测结果的坐标系转化到camera数据帧的坐标系
-
-    //将原点移到frame中心
-    val frameCenterX: Float
-    val frameCenterY: Float
-    if (cameraOrientation == 90 || cameraOrientation == 270) {
-        frameCenterX = cameraSize.height / 2f
-        frameCenterY = cameraSize.width / 2f
-    } else {
-        frameCenterX = cameraSize.width / 2f
-        frameCenterY = cameraSize.height / 2f
-    }
-    drawMatrix.postTranslate(-frameCenterX, -frameCenterY)
-    //旋转frame
-    val rotate = 360 - cameraOrientation
-    drawMatrix.postRotate(rotate.toFloat())
-    //旋转后frame尺寸将与camera数据帧的尺寸一致
-    //再将原点移到新frame的左上角
-    val cameraCenterX = cameraSize.width / 2f
-    val cameraCenterY = cameraSize.height / 2f
-    drawMatrix.postTranslate(cameraCenterX, cameraCenterY)
-
-    //步骤2、将camera数据帧的坐标系，转化成预览帧的坐标系
-    if (isFrontCamera) {
-        drawMatrix.postScale(-1f, 1f, cameraCenterX, cameraCenterY);
-    }
-
-    //步骤3、将预览帧拉伸到整个View
+    // 步骤1：计算 textureMatrix（默认拉伸矩阵）
+    // TextureView 默认将 cameraSize 拉伸到 displaySize
+    val textureMatrix = Matrix()
     val scaleX = displaySize.width / cameraSize.width.toFloat()
     val scaleY = displaySize.height / cameraSize.height.toFloat()
-    drawMatrix.postScale(scaleX, scaleY)
+    textureMatrix.setScale(scaleX, scaleY)
 
-    //至此，已经将人脸检测结果的坐标系转化到默认预览坐标系
-    //后续的步骤，是如何将预览帧正确的显示在view上，如旋转、设置宽高缩放比，是否需要镜像
-    return drawMatrix
+    // 步骤2：计算 displayMatrix（正确显示所需的最终矩阵）
+    val displayMatrix = getFrameToDisplayMatrix(
+        cameraRotate,
+        cameraSize,
+        displaySize,
+        scaleType,
+        mirror
+    )
+
+    // 步骤3：计算 previewMatrix = displayMatrix * textureMatrix^(-1)
+    val invertedTextureMatrix = Matrix()
+    if (!textureMatrix.invert(invertedTextureMatrix)) {
+        // 如果矩阵不可逆，返回单位矩阵
+        return Matrix()
+    }
+
+    val previewMatrix = Matrix()
+    previewMatrix.setConcat(displayMatrix, invertedTextureMatrix)
+
+    return previewMatrix
+}
+
+/**
+ * 用于将 Frame 数据坐标转换为 TextureView 显示坐标。
+ *
+ * @param cameraRotate camera 画面需要旋转的角度（0, 90, 180, 270）
+ * @param cameraSize camera 预览尺寸（Frame 的原始尺寸）
+ * @param displaySize TextureView 的显示尺寸
+ * @param scaleType 缩放方式（需要与 TextureView 的 previewMatrix 使用相同的 scaleType）
+ * @param mirror 是否镜像（需要与 TextureView 的 previewMatrix 使用相同的 mirror 参数）
+ */
+fun getFrameMatrix(
+    cameraRotate: Int,
+    cameraSize: Size,
+    displaySize: Size,
+    scaleType: ScaleType = ScaleType.CENTER_CROP,
+    mirror: Boolean = false
+): Matrix {
+    return getFrameToDisplayMatrix(cameraRotate, cameraSize, displaySize, scaleType, mirror)
+}
+
+/**
+ * 计算从 Frame 原始坐标系到最终显示坐标系的变换矩阵
+ *
+ * @param cameraRotate camera 画面需要旋转的角度（0, 90, 180, 270）
+ * @param cameraSize camera 预览尺寸（Frame 的原始尺寸）
+ * @param displaySize 显示尺寸
+ * @param scaleType 缩放方式
+ * @param mirror 是否镜像
+ * @return 从 Frame 坐标系到显示坐标系的变换矩阵
+ */
+private fun getFrameToDisplayMatrix(
+    cameraRotate: Int,
+    cameraSize: Size,
+    displaySize: Size,
+    scaleType: ScaleType,
+    mirror: Boolean
+): Matrix {
+    val matrix = Matrix()
+    val centerX = displaySize.width / 2f
+    val centerY = displaySize.height / 2f
+
+    // 1. 计算旋转后的 camera 内容尺寸
+    val rotatedWidth: Int
+    val rotatedHeight: Int
+    if (cameraRotate == 90 || cameraRotate == 270) {
+        rotatedWidth = cameraSize.height
+        rotatedHeight = cameraSize.width
+    } else {
+        rotatedWidth = cameraSize.width
+        rotatedHeight = cameraSize.height
+    }
+
+    // 2. 根据 scaleType 计算最终缩放比例
+    val finalScaleX: Float
+    val finalScaleY: Float
+    when (scaleType) {
+        ScaleType.FIT_XY -> {
+            // 拉伸填充：不保持宽高比
+            finalScaleX = displaySize.width / rotatedWidth.toFloat()
+            finalScaleY = displaySize.height / rotatedHeight.toFloat()
+        }
+
+        ScaleType.CENTER -> {
+            // 保持原始大小
+            finalScaleX = 1f
+            finalScaleY = 1f
+        }
+
+        ScaleType.CENTER_CROP -> {
+            // 保持宽高比，裁剪填充（确保填满，可能裁剪）
+            val displayRatio = displaySize.width / displaySize.height.toFloat()
+            val contentRatio = rotatedWidth / rotatedHeight.toFloat()
+
+            // 选择能填满 display 的缩放比例（较大的）
+            val scale = if (displayRatio > contentRatio) {
+                displaySize.width / rotatedWidth.toFloat()
+            } else {
+                displaySize.height / rotatedHeight.toFloat()
+            }
+
+            finalScaleX = scale
+            finalScaleY = scale
+        }
+
+        ScaleType.CENTER_INSIDE -> {
+            // 保持宽高比，完整显示（确保完整，可能留白）
+            val displayRatio = displaySize.width / displaySize.height.toFloat()
+            val contentRatio = rotatedWidth / rotatedHeight.toFloat()
+
+            // 选择能完整显示的缩放比例（较小的）
+            val scale = if (displayRatio > contentRatio) {
+                displaySize.height / rotatedHeight.toFloat()
+            } else {
+                displaySize.width / rotatedWidth.toFloat()
+            }
+
+            finalScaleX = scale
+            finalScaleY = scale
+        }
+    }
+
+    // 3. 构建 resultMatrix：从原始 camera 坐标系变换到最终显示
+    // 步骤1：将原点移到 Frame 中心
+    matrix.postTranslate(-cameraSize.width / 2f, -cameraSize.height / 2f)
+    // 步骤2：旋转到正确的方向
+    matrix.postRotate(cameraRotate.toFloat())
+    // 步骤3：镜像（前置摄像头通常需要）
+    if (mirror) {
+        matrix.postScale(-1f, 1f)
+    }
+    // 步骤4：缩放到正确的大小
+    matrix.postScale(finalScaleX, finalScaleY)
+    // 步骤5：移动到 Display 中心
+    matrix.postTranslate(centerX, centerY)
+
+    return matrix
 }

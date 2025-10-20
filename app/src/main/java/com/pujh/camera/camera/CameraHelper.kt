@@ -26,12 +26,12 @@ class CameraHelper(
      * 打开Camera
      * @param cameraId 摄像头ID
      * @param surface 预览 SurfaceTexture
-     * @param displaySize 显示控件尺寸
+     * @param suggestSize 建议尺寸
      */
     fun openCamera(
         cameraId: Int,
         surface: SurfaceTexture,
-        displaySize: Size,
+        suggestSize: Size,
     ) = synchronized(cameraLock) {
         if (camera != null) {
             Log.e(TAG, "camera has opened!")
@@ -52,7 +52,7 @@ class CameraHelper(
 
         //设置预览尺寸
         val displayRotation = context.getDisplayRotation()
-        val previewSize = getPreviewSize(cameraInfo, parameters, displaySize, displayRotation)
+        val previewSize = getPreviewSize(cameraInfo, parameters, suggestSize, displayRotation)
         parameters.setPreviewSize(previewSize.width, previewSize.height)
 
         //设置摄像头自动对焦
@@ -137,7 +137,7 @@ private fun getPreviewFormat(cameraInfo: CameraInfo, parameters: Camera.Paramete
 private fun getPreviewSize(
     cameraInfo: CameraInfo,
     parameters: Camera.Parameters,
-    displaySize: Size,
+    suggestSize: Size,
     displayRotation: Int,
 ): Size {
     val sizeList = parameters.supportedPreviewSizes
@@ -154,8 +154,8 @@ private fun getPreviewSize(
         "cameraOrientation=${cameraInfo.orientation}, displayRotation=$displayRotation, cameraRotate=$cameraRotate"
     )
 
-    val previewSize = getOptimalPreviewSize(sizeList, cameraRotate, displaySize)
-    Log.d(TAG, "display size = ${displaySize.width}x${displaySize.height}")
+    val previewSize = getOptimalPreviewSize(sizeList, cameraRotate, suggestSize)
+    Log.d(TAG, "suggest size = ${suggestSize.width}x${suggestSize.height}")
     Log.d(TAG, "result size = ${previewSize.width}x${previewSize.height}")
     return previewSize
 }

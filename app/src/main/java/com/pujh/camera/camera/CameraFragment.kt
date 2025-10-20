@@ -22,7 +22,7 @@ import com.pujh.camera.camera.util.ScaleType
 import com.pujh.camera.camera.util.getCameraId
 import com.pujh.camera.camera.util.getCameraRotate
 import com.pujh.camera.camera.util.getDisplayRotation
-import com.pujh.camera.camera.util.getPreviewMatrix
+import com.pujh.camera.camera.util.getPreviewMatrix2
 import com.pujh.camera.databinding.FragmentCameraBinding
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -52,7 +52,7 @@ class CameraFragment : Fragment(), CameraCallback {
     private val cameraId: Int
         get() = getCameraId(facing)
 
-    private var scaleType: ScaleType = ScaleType.CENTER_INSIDE
+    private var scaleType: ScaleType = ScaleType.CENTER_CROP
 
     private val surface: SurfaceTexture?
         get() = textureView.takeIf { it.isAvailable }?.surfaceTexture
@@ -189,7 +189,7 @@ class CameraFragment : Fragment(), CameraCallback {
             displayRotation
         )
 
-        val previewMatrix = getPreviewMatrix(
+        val previewMatrix = getPreviewMatrix2(
             cameraRotate = cameraRotate,
             cameraSize = Size(frameInfo.width, frameInfo.height),
             displaySize = displaySize!!,
