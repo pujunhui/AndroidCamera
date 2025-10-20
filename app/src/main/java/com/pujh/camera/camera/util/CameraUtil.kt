@@ -56,6 +56,8 @@ fun getCameraRotate(
 }
 
 /**
+ * 获取Camera的最佳预览尺寸
+ *
  * @param sizeList 摄像头支持的分辨率列表
  * @param cameraRotate 表示camera画面旋转多少度后，才能跟当前屏幕方向匹配，并非cameraOrientation
  * @param displaySize 显示控件的尺寸
@@ -65,7 +67,7 @@ fun getCameraRotate(
  * 1. 优先选择宽高比匹配的尺寸
  * 2. 在宽高比匹配的尺寸中，优先选择分辨率接近且不低于目标的
  * 3. 如果没有宽高比匹配的，选择总体最接近的尺寸
- * 4. 保证总是从 sizeList 中选择，不使用硬编码值
+ * 4. 保证总是从支持的尺寸列表中选择
  */
 fun getOptimalPreviewSize(
     sizeList: List<Camera.Size>,
@@ -73,7 +75,7 @@ fun getOptimalPreviewSize(
     displaySize: Size,
 ): Size {
     if (sizeList.isEmpty()) {
-        throw IllegalArgumentException("sizeList cannot be empty")
+        throw IllegalArgumentException("No available output sizes")
     }
 
     // 根据旋转角度调整目标尺寸
@@ -106,14 +108,14 @@ fun getOptimalPreviewSize(
 
         return if (largerOrEqualSizes.isNotEmpty()) {
             // 选择最接近目标的（面积差最小）
-            largerOrEqualSizes.minByOrNull { size ->
+            largerOrEqualSizes.minBy { size ->
                 abs(size.width * size.height - targetArea)
-            }?.let { Size(it.width, it.height) }!!
+            }.let { Size(it.width, it.height) }
         } else {
             // 没有大于等于目标的，选择最接近的（面积差最小）
-            aspectMatchSizes.minByOrNull { size ->
+            aspectMatchSizes.minBy { size ->
                 abs(size.width * size.height - targetArea)
-            }?.let { Size(it.width, it.height) }!!
+            }.let { Size(it.width, it.height) }
         }
     }
 

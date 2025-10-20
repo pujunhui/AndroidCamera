@@ -1,36 +1,31 @@
 package com.pujh.camera.camera2
 
-import android.annotation.SuppressLint
-import android.content.Context
-import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
-import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.TotalCaptureResult
-import android.hardware.camera2.params.OutputConfiguration
-import android.hardware.camera2.params.SessionConfiguration
-import android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR
 import android.media.ImageReader
-import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.util.Size
 import android.view.LayoutInflater
 import android.view.Surface
 import android.view.TextureView
-import android.view.TextureView.SurfaceTextureListener
 import android.view.View
 import android.view.ViewGroup
-import androidx.appcompat.app.AppCompatActivity.CAMERA_SERVICE
-import androidx.core.content.ContextCompat
+import android.widget.Toast
 import androidx.fragment.app.Fragment
+import com.pujh.camera.camera2.data.CameraInfo
 import com.pujh.camera.camera2.util.ScaleType
 import com.pujh.camera.camera2.util.getCamera2Matrix
+import com.pujh.camera.camera2.util.getCameraId
+import com.pujh.camera.camera2.util.getCameraInfo
 import com.pujh.camera.camera2.util.getCameraRotate
 import com.pujh.camera.camera2.util.getDisplayRotation
+import com.pujh.camera.camera2.util.getOptimalPreviewSize
+import com.pujh.camera.camera2.util.getOutputSizes
 import com.pujh.camera.databinding.FragmentCamera2Binding
 
 /**
@@ -55,28 +50,32 @@ import com.pujh.camera.databinding.FragmentCamera2Binding
  * 如果我们的app最低支持的系统版本<23，则需要使用MediaCodec+AudioRecord+MediaMuxer
  */
 
-class Camera2Fragment : Fragment(), ImageReader.OnImageAvailableListener {
+class Camera2Fragment : Fragment(), Camera2Callback {
     private lateinit var binding: FragmentCamera2Binding
 
     private lateinit var textureView: TextureView
 
+    // 相机配置
     private var facing = CameraCharacteristics.LENS_FACING_BACK
-    private val cameraId: String
-        get() = requireContext().getCameraId(facing)
-    private var cameraSize: Size = Size(1920, 1080)
-
-    //    private var cameraSize: Size = Size(2592, 1944)
     private var scaleType: ScaleType = ScaleType.CENTER_CROP
 
+    // Helper类
+    private val cameraHelper: Camera2Helper by lazy { Camera2Helper(requireContext(), this) }
+    private val imageCaptureHelper: ImageCaptureHelper by lazy { ImageCaptureHelper(requireContext()) }
+
+    // 状态
+    private var currentCamera: CameraDevice? = null
+    private var currentSession: CameraCaptureSession? = null
+
+    // TextureView相关
     private val texture: SurfaceTexture?
         get() = textureView.takeIf { it.isAvailable }?.surfaceTexture
 
     private val displaySize: Size?
         get() = textureView.takeIf { it.isAvailable }?.let { Size(it.width, it.height) }
 
-    private var camera: CameraDevice? = null
-    private var captureSession: CameraCaptureSession? = null
-    private var imageReader: ImageReader? = null
+    private val cameraId: String
+        get() = requireContext().getCameraId(facing)
 
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?,
@@ -96,10 +95,6 @@ class Camera2Fragment : Fragment(), ImageReader.OnImageAvailableListener {
         }
     }
 
-    override fun onDestroyView() {
-        super.onDestroyView()
-    }
-
     override fun onResume() {
         super.onResume()
         if (textureView.isAvailable) {
@@ -108,7 +103,15 @@ class Camera2Fragment : Fragment(), ImageReader.OnImageAvailableListener {
         binding.textureView.surfaceTextureListener = textureListener
     }
 
-    private val textureListener = object : SurfaceTextureListener {
+    override fun onDestroyView() {
+        super.onDestroyView()
+        closeCamera()
+        imageCaptureHelper.release()
+    }
+
+    // ==================== TextureView监听 ====================
+
+    private val textureListener = object : TextureView.SurfaceTextureListener {
         override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
             reopenCamera()
         }
@@ -122,47 +125,66 @@ class Camera2Fragment : Fragment(), ImageReader.OnImageAvailableListener {
             return true
         }
 
-        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
-        }
+        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
     }
+
+    // ==================== 相机操作 ====================
 
     private fun reopenCamera() {
         closeCamera()
+
         val texture = this.texture ?: return
         val displaySize = this.displaySize ?: return
-        openCamera(cameraId, cameraSize, texture, displaySize, scaleType)
+
+        openCamera(cameraId, texture, displaySize, scaleType)
     }
 
-    @SuppressLint("MissingPermission")
     private fun openCamera(
         cameraId: String,
-        cameraSize: Size,
         texture: SurfaceTexture,
         displaySize: Size,
         scaleType: ScaleType
     ) {
-        val manager = requireContext().getSystemService(CAMERA_SERVICE) as CameraManager
-        manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
-            override fun onOpened(camera: CameraDevice) {
-                this@Camera2Fragment.camera = camera
-                createCameraPreviewSession(camera, texture, cameraSize, displaySize, scaleType)
-            }
+        // 获取相机特性
+        val characteristics = cameraHelper.getCameraCharacteristics(cameraId)
 
-            override fun onClosed(camera: CameraDevice) {
-                Log.d(TAG, "Camera closed!")
-            }
+        // 获取camera信息
+        val cameraInfo = characteristics.getCameraInfo(cameraId)
 
-            override fun onDisconnected(camera: CameraDevice) {
-                Log.d(TAG, "Camera onDisconnected!")
-                closeCamera()
-            }
+        val sizeList = characteristics.getOutputSizes(SurfaceTexture::class.java)
 
-            override fun onError(camera: CameraDevice, error: Int) {
-                Log.d(TAG, "Camera onError: $error")
-                closeCamera()
-            }
+        val displayRotation = requireActivity().getDisplayRotation()
 
-        }, null)
+        val isFrontCamera = cameraInfo.facing == CameraInfo.LENS_FACING_FRONT
+        val cameraRotate = getCameraRotate(isFrontCamera, cameraInfo.orientation, displayRotation)
+
+        // 根据displaySize和camera支持的分辨率列表，计算最佳尺寸
+        val cameraSize = getOptimalPreviewSize(sizeList, cameraRotate, displaySize)
+
+        Log.d(TAG, "Display size: ${displaySize.width}x${displaySize.height}")
+        Log.d(TAG, "Camera rotate: $cameraRotate°")
+        Log.d(TAG, "Optimal camera size: ${cameraSize.width}x${cameraSize.height}")
+
+        // 计算并应用Matrix变换
+        applyMatrixTransform(cameraId, cameraSize, displaySize, scaleType)
+
+        // 创建ImageReader
+        val imageReader = imageCaptureHelper.createImageReader(cameraSize) { reader ->
+            handleCapturedImage(reader)
+        }
+
+        // 准备输出Surface
+        val previewSurface = Surface(texture)
+        val outputs = listOf(previewSurface, imageReader.surface)
+
+        // 打开相机
+        cameraHelper.openCamera(cameraId, cameraSize, texture, outputs)
+    }
+
+    private fun closeCamera() {
+        cameraHelper.closeCamera()
+        currentCamera = null
+        currentSession = null
     }
 
     private fun switchCamera() {
@@ -174,17 +196,16 @@ class Camera2Fragment : Fragment(), ImageReader.OnImageAvailableListener {
         reopenCamera()
     }
 
-    private fun createCameraPreviewSession(
-        camera: CameraDevice,
-        texture: SurfaceTexture,
+    // ==================== Matrix变换 ====================
+
+    private fun applyMatrixTransform(
+        cameraId: String,
         cameraSize: Size,
         displaySize: Size,
         scaleType: ScaleType
     ) {
-        val manager = requireContext().getSystemService(CAMERA_SERVICE) as CameraManager
-        val characteristics = manager.getCameraCharacteristics(camera.id)
+        val characteristics = cameraHelper.getCameraCharacteristics(cameraId)
 
-        //获取摄像头朝向
         val isFrontCamera =
             characteristics[CameraCharacteristics.LENS_FACING] == CameraCharacteristics.LENS_FACING_FRONT
         val cameraOrientation = characteristics[CameraCharacteristics.SENSOR_ORIENTATION]!!
@@ -198,112 +219,70 @@ class Camera2Fragment : Fragment(), ImageReader.OnImageAvailableListener {
             displaySize,
             scaleType
         )
+
         textureView.setTransform(matrix)
-
-        texture.setDefaultBufferSize(cameraSize.width, cameraSize.height)
-
-        //获取StreamConfigurationMap，它是管理摄像头支持的所有输出格式和尺寸
-        val map = characteristics[CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP]!!
-        val format = ImageFormat.JPEG
-        val outputSize = map.getOutputSizes(format).maxBy { it.width * it.height }
-        val imageReader = ImageReader.newInstance(cameraSize.width, cameraSize.height, format, 2)
-        imageReader.setOnImageAvailableListener(this, null)
-
-        val surface = Surface(texture)
-//        val outputs = listOf(surface, recordSurface, imageReader.surface)
-        val outputs = listOf(surface, imageReader.surface)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val outputConfigurations = outputs.map { output ->
-                OutputConfiguration(output)
-            }
-            val config = SessionConfiguration(
-                SESSION_REGULAR,
-                outputConfigurations,
-                ContextCompat.getMainExecutor(requireContext()),
-                object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(session: CameraCaptureSession) {
-                        this@Camera2Fragment.captureSession = session
-                        this@Camera2Fragment.imageReader = imageReader
-
-                        val previewRequest =
-                            camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                                addTarget(surface)
-                            }.build()
-                        session.setRepeatingRequest(previewRequest, null, null)
-                    }
-
-                    override fun onConfigureFailed(session: CameraCaptureSession) {
-
-                    }
-                })
-            camera.createCaptureSession(config)
-        } else {
-            camera.createCaptureSession(
-                outputs,
-                object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(session: CameraCaptureSession) {
-                        this@Camera2Fragment.captureSession = session
-                        this@Camera2Fragment.imageReader = imageReader
-
-                        val previewRequest =
-                            camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                                addTarget(surface)
-                            }.build()
-                        session.setRepeatingRequest(previewRequest, null, null)
-                    }
-
-                    override fun onConfigureFailed(session: CameraCaptureSession) {
-
-                    }
-                }, null
-            )
-        }
     }
 
-    private fun closeCamera() {
-        camera?.close()
-        camera = null
-    }
+    // ==================== 拍照 ====================
 
     private fun takePhoto() {
-        val camera = camera ?: return
-        val imageReader = imageReader ?: return
-        val captureRequest = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-            .apply {
-                addTarget(imageReader.surface)
-                set(
-                    CaptureRequest.CONTROL_AF_MODE,
-                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
-                )
-                set(CaptureRequest.JPEG_ORIENTATION, 90)
-            }.build()
-        captureSession?.stopRepeating()
-        captureSession?.abortCaptures()
-        captureSession?.capture(captureRequest, object : CameraCaptureSession.CaptureCallback() {
+        val imageReader = imageCaptureHelper.getImageReader() ?: return
+
+        cameraHelper.takePicture(imageReader, object : CameraCaptureSession.CaptureCallback() {
             override fun onCaptureCompleted(
                 session: CameraCaptureSession,
                 request: CaptureRequest,
                 result: TotalCaptureResult
             ) {
+                Log.d(TAG, "Capture completed")
             }
-        }, null)
+        })
+    }
+
+    private fun handleCapturedImage(reader: ImageReader) {
+        val image = reader.acquireLatestImage() ?: return
+
+        try {
+            // 这里可以处理图片数据
+            // 例如保存到相册
+            image.close()
+
+            // 示例：如果需要保存JPEG数据
+            // val buffer = image.planes[0].buffer
+            // val bytes = ByteArray(buffer.remaining())
+            // buffer.get(bytes)
+            // imageCaptureHelper.saveImageToGallery(bytes,
+            //     onSuccess = {
+            //         Toast.makeText(requireContext(), "保存成功", Toast.LENGTH_SHORT).show()
+            //     },
+            //     onError = { error ->
+            //         Toast.makeText(requireContext(), "保存失败: ${error.message}", Toast.LENGTH_SHORT).show()
+            //     }
+            // )
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to handle image", e)
+            image.close()
+        }
+    }
+
+    // ==================== Camera2Callback实现 ====================
+
+    override fun onCameraReady(camera: CameraDevice, session: CameraCaptureSession) {
+        currentCamera = camera
+        currentSession = session
+        Log.d(TAG, "Camera ready")
+    }
+
+    override fun onCameraClosed() {
+        Log.d(TAG, "Camera closed")
+    }
+
+    override fun onCameraError(error: String) {
+        Log.e(TAG, "Camera error: $error")
+        Toast.makeText(requireContext(), "相机错误: $error", Toast.LENGTH_SHORT).show()
     }
 
     companion object {
         private const val TAG = "Camera2Fragment"
     }
-
-    override fun onImageAvailable(reader: ImageReader) {
-        val image = reader.acquireLatestImage()
-        image.close()
-    }
-}
-
-private fun Context.getCameraId(facing: Int, default: String = "0"): String {
-    val manager = getSystemService(CAMERA_SERVICE) as CameraManager
-    return manager.cameraIdList.firstOrNull { cameraId ->
-        val characteristics = manager.getCameraCharacteristics(cameraId)
-        characteristics[CameraCharacteristics.LENS_FACING] == facing
-    } ?: default
 }

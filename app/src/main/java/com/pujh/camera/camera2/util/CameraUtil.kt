@@ -1,123 +1,43 @@
 package com.pujh.camera.camera2.util
 
-import android.graphics.Matrix
-import android.util.Log
+import android.content.Context
+import android.content.Context.CAMERA_SERVICE
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.util.Size
+import kotlin.math.abs
+
+typealias AppCameraInfo = com.pujh.camera.camera2.data.CameraInfo
 
 private const val TAG = "CameraUtil"
 
-enum class ScaleType {
-    FIT_XY,  //不保持宽高比，拉伸填充
-    CENTER,  //保持原大小，居中显示
-    CENTER_CROP,  //保持宽高比，居中，同时满足任意方向填充满，不会留空白
-    CENTER_INSIDE,  //保持宽高比，居中，满足任意方向填充满即可，可能会留空白
+fun Context.getCameraId(facing: Int, default: String = "0"): String {
+    val manager = getSystemService(CAMERA_SERVICE) as CameraManager
+    return manager.cameraIdList.firstOrNull { cameraId ->
+        val characteristics = manager.getCameraCharacteristics(cameraId)
+        characteristics[CameraCharacteristics.LENS_FACING] == facing
+    } ?: default
 }
 
 /**
- * Camera2+TextureView进行预览时，默认采用全铺满的方式进行显示，并且确保了在设备自然方向，预览画面角度正确。
- * 但是当设备旋转后，displayOrientation可能改变，也可能不变(如锁定方向)。
- * 当displayOrientation改变后，Camera2模块其实是检测不到的，依旧按照原先计算的角度显示，导致画面角度不正确。
- *
- * 矩阵计算思路:
- *   1、同时旋转camera帧和surface
- *   2、计算surface的宽高缩放比，让旋转后的camera帧满足显示要求
- *   3、通过display裁剪surface区域
- *
- * 其中涉及的变量：
- * contentSize，camera frame旋转后的尺寸
- * surfaceSize，display旋转后的尺寸，最终可绘制的区域是surface和display交集
- *
- * @param cameraRotate 表示camera画面旋转多少度后，才能正确在当前屏幕上显示
- * @param displayRotation 屏幕旋转角度
- * @param cameraSize camera预览尺寸（camera数据流大小）
- * @param displaySize 显示控件（TextureView）大小
- * @param scaleType 缩放方式
- * @param mirror 对显示画面进行额外水平镜像，一般默认false即可。如果是前置摄像头，并且不希望镜像显示，则可设置为true
+ * 通过cameraId获取摄像头信息
  */
-fun getCamera2Matrix(
-    cameraRotate: Int,
-    displayRotation: Int,
-    cameraSize: Size,
-    displaySize: Size,
-    scaleType: ScaleType = ScaleType.CENTER_CROP,
-    mirror: Boolean = false
-): Matrix {
-    val matrix = Matrix()
-    val remainRotate = (360 - displayRotation) % 360
+fun CameraCharacteristics.getCameraInfo(cameraId: String): AppCameraInfo {
+    val facing = this[CameraCharacteristics.LENS_FACING]!!
+    // CameraInfo的orientation，既是camera sensor的角度，也是camera frame的角度
+    // camera frame顺时针旋转该角度后，将得到正确的图像
+    val orientation = this[CameraCharacteristics.SENSOR_ORIENTATION]!!
+    return AppCameraInfo(cameraId, facing, orientation)
+}
 
-    val contentWidth: Int
-    val contentHeight: Int
-    val surfaceWidth: Int
-    val surfaceHeight: Int
 
-    if (cameraRotate == 90 || cameraRotate == 270) {
-        contentWidth = cameraSize.height
-        contentHeight = cameraSize.width
-    } else {
-        contentWidth = cameraSize.width
-        contentHeight = cameraSize.height
-    }
+fun <T> CameraCharacteristics.getOutputSizes(klass: Class<T>): List<Size> {
+    // 获取StreamConfigurationMap
+    val map = this[CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP]
+        ?: throw IllegalStateException("Cannot get SCALER_STREAM_CONFIGURATION_MAP")
 
-    if (remainRotate == 90 || remainRotate == 270) {
-        surfaceWidth = displaySize.height
-        surfaceHeight = displaySize.width
-    } else {
-        surfaceWidth = displaySize.width
-        surfaceHeight = displaySize.height
-    }
-    val scaleX: Float
-    val scaleY: Float
-    when (scaleType) {
-        ScaleType.FIT_XY -> {
-            scaleX = displaySize.width / surfaceWidth.toFloat()
-            scaleY = displaySize.height / surfaceHeight.toFloat()
-        }
-
-        ScaleType.CENTER -> {
-            // P * (surfaceSize / contentSize) * scale = P`
-            // 当P = P`时， scale = contentSize / surfaceSize
-            scaleX = contentWidth / surfaceWidth.toFloat()
-            scaleY = contentHeight / surfaceHeight.toFloat()
-        }
-
-        ScaleType.CENTER_CROP -> {
-            val displayRatio = displaySize.width / displaySize.height.toFloat()
-            val contentRatio = contentWidth / contentHeight.toFloat()
-            val scale = if (displayRatio > contentRatio) {
-                displaySize.width / contentWidth.toFloat()
-            } else {
-                displaySize.height / contentHeight.toFloat()
-            }
-            //求得共同缩放比后，再乘各自的反形变缩放比，从而避免变形
-            scaleX = scale * contentWidth / surfaceWidth.toFloat()
-            scaleY = scale * contentHeight / surfaceHeight.toFloat()
-        }
-
-        ScaleType.CENTER_INSIDE -> {
-            val displayRatio = displaySize.width / displaySize.height.toFloat()
-            val contentRatio = contentWidth / contentHeight.toFloat()
-            val scale = if (displayRatio > contentRatio) {
-                displaySize.height / contentHeight.toFloat()
-            } else {
-                displaySize.width / contentWidth.toFloat()
-            }
-            //求得共同缩放比后，再乘各自的反形变缩放比，避免变形
-            scaleX = scale * contentWidth / surfaceWidth.toFloat()
-            scaleY = scale * contentHeight / surfaceHeight.toFloat()
-        }
-    }
-
-    Log.d(TAG, "scaleX=$scaleX, scaleY=$scaleY, rotate=$remainRotate")
-
-    val centerX = displaySize.width / 2f
-    val centerY = displaySize.height / 2f
-    matrix.postRotate(remainRotate.toFloat(), centerX, centerY)
-    if (mirror) {
-        matrix.postScale(-scaleX, scaleY, centerX, centerY)
-    } else {
-        matrix.postScale(scaleX, scaleY, centerX, centerY)
-    }
-    return matrix
+    // 获取相机支持的输出尺寸（用于预览）
+    return map.getOutputSizes(klass).asList()
 }
 
 /**
@@ -139,4 +59,84 @@ fun getCameraRotate(
         result = (cameraOrientation - displayRotation + 360) % 360
     }
     return result
+}
+
+/**
+ * 获取Camera的最佳预览尺寸
+ *
+ * @param sizeList 摄像头支持的分辨率列表
+ * @param cameraRotate 表示camera画面旋转多少度后，才能跟当前屏幕方向匹配
+ * @param displaySize 显示控件的尺寸
+ * @return 返回摄像头最佳预览尺寸
+ *
+ * 算法策略：
+ * 1. 优先选择宽高比匹配的尺寸
+ * 2. 在宽高比匹配的尺寸中，优先选择分辨率接近且不低于目标的
+ * 3. 如果没有宽高比匹配的，选择总体最接近的尺寸
+ * 4. 保证总是从支持的尺寸列表中选择
+ */
+fun getOptimalPreviewSize(
+    sizeList: List<Size>,
+    cameraRotate: Int,
+    displaySize: Size,
+): Size {
+    if (sizeList.isEmpty()) {
+        throw IllegalArgumentException("No available output sizes")
+    }
+
+    // 根据旋转角度调整目标尺寸
+    val targetWidth: Int
+    val targetHeight: Int
+    if (cameraRotate == 90 || cameraRotate == 270) {
+        targetWidth = displaySize.height
+        targetHeight = displaySize.width
+    } else {
+        targetWidth = displaySize.width
+        targetHeight = displaySize.height
+    }
+
+    val targetRatio = targetWidth / targetHeight.toFloat()
+    val targetArea = targetWidth * targetHeight
+
+    // 第一轮：查找宽高比匹配的尺寸（容差 15%）
+    val aspectTolerance = 0.15f
+    val aspectMatchSizes = sizeList.filter { size ->
+        val ratio = size.width / size.height.toFloat()
+        abs(ratio - targetRatio) <= aspectTolerance
+    }
+
+    if (aspectMatchSizes.isNotEmpty()) {
+        // 在宽高比匹配的尺寸中，优先选择分辨率接近目标且不小于目标的
+        // 如果没有不小于目标的，则选择最接近的
+        val largerOrEqualSizes = aspectMatchSizes.filter { size ->
+            size.width >= targetWidth && size.height >= targetHeight
+        }
+
+        return if (largerOrEqualSizes.isNotEmpty()) {
+            // 选择最接近目标的（面积差最小）
+            largerOrEqualSizes.minBy { size ->
+                abs(size.width * size.height - targetArea)
+            }
+        } else {
+            // 没有大于等于目标的，选择最接近的（面积差最小）
+            aspectMatchSizes.minBy { size ->
+                abs(size.width * size.height - targetArea)
+            }
+        }
+    }
+
+    // 第二轮：没有宽高比匹配的，使用综合相似度评分
+    // 评分 = 宽高比差异权重 + 分辨率差异权重
+    val bestSize = sizeList.minByOrNull { size ->
+        val ratio = size.width / size.height.toFloat()
+        val ratioDiff = abs(ratio - targetRatio) / targetRatio // 归一化的比例差异
+
+        val area = size.width * size.height
+        val areaDiff = abs(area - targetArea) / targetArea.toFloat() // 归一化的面积差异
+
+        // 综合评分：宽高比权重更高（0.7），分辨率权重较低（0.3）
+        ratioDiff * 0.7f + areaDiff * 0.3f
+    }
+
+    return bestSize ?: throw IllegalStateException("Failed to select optimal size")
 }
