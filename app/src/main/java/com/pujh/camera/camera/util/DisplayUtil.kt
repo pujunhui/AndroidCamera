@@ -1,4 +1,4 @@
-package com.pujh.camera.util
+package com.pujh.camera.camera.util
 
 import android.content.Context
 import android.os.Build
@@ -20,6 +20,6 @@ fun Context.getDisplayRotation(): Int {
         Surface.ROTATION_90 -> 90
         Surface.ROTATION_180 -> 180
         Surface.ROTATION_270 -> 270
-        else -> throw IllegalStateException("rotation is error")
+        else -> throw RuntimeException("rotation is error")
     }
 }

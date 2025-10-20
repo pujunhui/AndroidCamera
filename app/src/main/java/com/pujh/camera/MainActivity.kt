@@ -1,66 +1,34 @@
 package com.pujh.camera
 
-import android.Manifest
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.pujh.camera.camera.CameraFragment
 import com.pujh.camera.camera2.Camera2Fragment
 import com.pujh.camera.camerax.CameraXFragment
 import com.pujh.camera.databinding.ActivityMainBinding
-import com.pujh.ffmpeg.ExternalStoragePermission
-import com.pujh.ffmpeg.checkExternalStoragePermission
+import com.pujh.camera.util.CameraPermission
+import com.pujh.camera.util.checkCameraPermission
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private var cameraType = -1
 
-    private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
+    // Camera permission launcher
+    private val requestCameraPermissionLauncher = registerForActivityResult(
+        CameraPermission()
     ) { granted ->
         if (granted) {
             setCameraType(cameraType)
         } else {
-            Toast.makeText(
-                this,
-                "Permissions not granted by the user!",
-                Toast.LENGTH_SHORT
-            ).show()
-            val intent = Intent(
-                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.parse("package:$packageName")
-            )
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
-        }
-    }
-    private val requestPermissionLauncher1 = registerForActivityResult(
-        ExternalStoragePermission()
-    ) { granted ->
-        if (granted) {
-            binding.cameraType.check(R.id.camera1_btn)
-        } else {
-            Toast.makeText(
-                this,
-                "Permissions not granted by the user!",
-                Toast.LENGTH_SHORT
-            ).show()
-            val intent = Intent(
-                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.parse("package:$packageName")
-            )
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
+            handlePermissionDenied()
         }
     }
 
@@ -86,22 +54,37 @@ class MainActivity : AppCompatActivity() {
             setCameraType(cameraType)
         }
 
-        if (checkExternalStoragePermission()) {
-            binding.cameraType.check(R.id.camera1_btn)
-        } else {
-            requestPermissionLauncher1.launch(null)
-        }
         binding.cameraType.check(R.id.camera1_btn)
+    }
+
+    /**
+     * Handle permission denied - show toast and navigate to app settings
+     */
+    private fun handlePermissionDenied() {
+        Toast.makeText(
+            this,
+            "Permissions not granted by the user!",
+            Toast.LENGTH_SHORT
+        ).show()
+        navigateToAppSettings()
+    }
+
+    /**
+     * Navigate to app settings page
+     */
+    private fun navigateToAppSettings() {
+        val intent = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.parse("package:$packageName")
+        )
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
     }
 
     private fun setCameraType(cameraType: Int) {
         this.cameraType = cameraType
-        if (ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_DENIED
-        ) {
-            requestPermissionLauncher.launch(Manifest.permission.CAMERA)
+        if (!checkCameraPermission()) {
+            requestCameraPermissionLauncher.launch(null)
             return
         }
 

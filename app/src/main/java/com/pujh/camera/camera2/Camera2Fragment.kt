@@ -14,8 +14,6 @@ import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
 import android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR
 import android.media.ImageReader
-import android.media.MediaCodec
-import android.media.MediaFormat
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -29,11 +27,11 @@ import android.view.ViewGroup
 import androidx.appcompat.app.AppCompatActivity.CAMERA_SERVICE
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
+import com.pujh.camera.camera2.util.ScaleType
+import com.pujh.camera.camera2.util.getCamera2Matrix
+import com.pujh.camera.camera2.util.getCameraRotate
+import com.pujh.camera.camera2.util.getDisplayRotation
 import com.pujh.camera.databinding.FragmentCamera2Binding
-import com.pujh.camera.util.ScaleType
-import com.pujh.camera.util.getCamera2Matrix
-import com.pujh.camera.util.getCameraRotate
-import com.pujh.camera.util.getDisplayRotation
 
 /**
  * camera2 默认全填充Surface，并且旋转了画面，确保displayOrientation=0时，画面角度正确。
@@ -79,52 +77,6 @@ class Camera2Fragment : Fragment(), ImageReader.OnImageAvailableListener {
     private var camera: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
-
-//    private lateinit var recordSurface: Surface
-
-    private lateinit var encoder: MediaCodec
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-//        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height)
-//        format.setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
-//        format.setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
-//        format.setInteger(
-//            MediaFormat.KEY_COLOR_FORMAT,
-//            MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
-//        )
-//        format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, iFrameInterval)
-//        encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-//        encoder.setCallback(encoderCallback)
-//        recordSurface = encoder.createInputSurface()
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        encoder.reset()
-        encoder.release()
-    }
-
-    private val encoderCallback = object : MediaCodec.Callback() {
-        override fun onInputBufferAvailable(codec: MediaCodec, index: Int) {
-
-        }
-
-        override fun onOutputBufferAvailable(
-            codec: MediaCodec,
-            index: Int,
-            info: MediaCodec.BufferInfo
-        ) {
-        }
-
-        override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
-        }
-
-        override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
-        }
-    }
 
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?,
